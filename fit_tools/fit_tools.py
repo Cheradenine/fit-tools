@@ -20,6 +20,32 @@ def WindowOverlaps(windows, window):
       return True
   return False
 
+def ParseIntervalSpec(spec):
+  """ The interval spec is a comma separated list of count@time
+      pairs. Time can be specified in minutes or seconds using 'm' or 's'
+      respectivly.
+      Example:
+       2@30s,2@15m
+      Returns list of tuple: [(count, time in seconds)]
+"""
+  def ParseSpec(spec):
+    fields = spec.split('@')
+    if len(fields) != 2:
+      raise Exception('Expected 2 fields in interval spec: ' + spec)
+    count = int(fields[0])
+    duration = fields[1]
+    # last char is unit (s or m)
+    unit = duration[-1]
+    val = int(duration[:-1])
+    if unit == 'm':
+      val *= 60
+    elif unit != 's':
+      raise Exception('Unknown duration unit in interval spec: ' + unit)
+    return int(count), val
+
+  specs = spec.split(',')
+  return [ParseSpec(spec) for spec in specs]
+
 def FitToDataframe(fitfile, fields):
   """
   Function takes a fit file object and a list of fields to extract.
@@ -85,10 +111,9 @@ class FitIntervals:
 
 
 if __name__ == "__main__":
-  size = int(sys.argv[1])
-  count = int(sys.argv[2])
-  fname = sys.argv[3]
+  specs = ParseIntervalSpec(sys.argv[1])
+  fname = sys.argv[2]
   intervals = FitIntervals(fname)
-  intervals.FindIntervals(90, count)
-  intervals.FindIntervals(size, count)
+  for count, duration in specs:
+    intervals.FindIntervals(duration, count)
   intervals.Report()
