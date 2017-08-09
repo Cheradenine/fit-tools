@@ -5,20 +5,22 @@ from collections import defaultdict
 from fitparse import FitFile
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as pyplot
 
 FitWindow = namedtuple('FitWindow', ['start', 'end'])
 
-# Returns True if the window overlaps with a list of existing  windows
-def WindowOverlaps(windows, window):
-  for w in windows:
-    if window.start >= w.start and window.start <= w.end:
-      return True
-    if window.end >= w.start and window.end <= w.end:
-      return True
-    if window.start <= w.start and window.end >= w.end:
-      return True
-  return False
+class FitInterval:
+  def __init__(self, df, start, end):
+    self.df = df
+    self.start = start.to_timestamp()
+    self.end = end.to_timestamp()
+
+  def to_dataframe(self):
+    return self.df[self.start:self.end]
+
+  def overlaps(self, interval):
+    if interval.end < self.start or interval.start > self.end:
+      return False
+    return True
 
 def ParseIntervalSpec(spec):
   """ The interval spec is a comma separated list of count@time
@@ -72,48 +74,68 @@ def FitToDataframe(fitfile, fields):
 
   # Create time series dataframe in pandas
   df = pd.DataFrame(data, columns = fields)
-
   # Change datatype of timestamp field
   df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+  # Compute elapsed time column
+  elapsed_seconds = len(df['timestamp'])
+
+  df['elapsed'] = pd.date_range('00:00:00', periods=elapsed_seconds, freq='S')
   return df.set_index('timestamp')
+
+def FitPowerCurve(fit):
+  # TODO(Cheradenine): not working yet.
+  df = FitToDataframe(fit, ['power'])[['power']]
+  seconds = len(df.index)
+
+  def MaxWindow(df, size):
+    wdf = df.rolling(window=size).aggregate(np.mean)
+    return wdf['power'].max()
+  curve = [MaxWindow(df, size+1) for size in range(0, seconds)]
+  return pd.DataFrame(curve, index = df.index)
 
 class FitIntervals:
   """
   Contains a list of non-overlapping power intervals.
   """
 
-  def __init__(self, file_name):
-    self.fit = FitFile(file_name)
-    self.df = FitToDataframe(self.fit, ['power', 'heart_rate'])
+  def __init__(self, fit):
+    self.df = FitToDataframe(fit, ['power', 'heart_rate'])
     self.intervals = []
 
   def FindIntervals(self, size, count):
-    df = self.df.rolling(window=size).aggregate(np.mean)
+    df = self.df[['power']]
+    df = df.rolling(window=size).aggregate(np.mean)
     df = df.sort_values(by='power', ascending=0)
     max_count = len(self.intervals) + count
     for index, row in df.iterrows():
       power = row['power']
       period = pd.Period(index, freq='S')
       # Windows start on the right edge by default.
-      window = FitWindow(start=period-size, end=period)
-      if not WindowOverlaps(self.intervals, window):
-        self.intervals.append(window)
+      interval = FitInterval(self.df, start=period-size, end=period)
+      # determine if this new interval overlaps with any seen so far
+      if not any(interval.overlaps(i) for i in self.intervals):
+        self.intervals.append(interval)
         if len(self.intervals) == max_count:
           break
 
   def Report(self):
-    # TODO(Cheradine): clean this up.
+    # TODO(Cheradenine): clean this up.
     for interval in self.intervals:
       # Slice the data around the interval.
-      df = self.df[interval.start.to_timestamp():interval.end.to_timestamp()]
+      df = interval.to_dataframe()
       print('time={} - {}, power={:03.0f}, hr={:03.0f}'.format(
           interval.start, interval.end, df['power'].mean(), df['heart_rate'].mean()))
 
+def ComputePowerCurve(fname):
+  fit = FitFile(fname)
+  df = FitPowerCurve(fit)
+  return df
 
 if __name__ == "__main__":
   specs = ParseIntervalSpec(sys.argv[1])
-  fname = sys.argv[2]
-  intervals = FitIntervals(fname)
+  fit = FitFile(sys.argv[2])
+  intervals = FitIntervals(fit)
   for count, duration in specs:
     intervals.FindIntervals(duration, count)
   intervals.Report()
