@@ -2,7 +2,7 @@ import sys
 from collections import namedtuple
 from collections import defaultdict
 
-from fitparse import FitFile
+from fitparse import FitFile, FitParseError
 import pandas as pd
 import numpy as np
 
@@ -65,15 +65,21 @@ def FitToDataframe(fitfile, fields):
   data = defaultdict(list)
 
   # fields always includes timestamp:
-  fields = ['timestamp'] + fields
+  user_fields = fields[:]
+  fields = ['timestamp'] + user_fields
 
   # Read each requested field into a list, keyed by field name.
   for record in records:
     for field in fields:
+      val = record.get_value(field)
       data[field].append(record.get_value(field))
 
   # Create time series dataframe in pandas
   df = pd.DataFrame(data, columns = fields)
+
+  # Interpolate to fill in missing values.
+  df[user_fields].interpolate(method='cubic')
+
   # Change datatype of timestamp field
   df['timestamp'] = pd.to_datetime(df['timestamp'])
 
@@ -118,6 +124,8 @@ class FitIntervals:
         self.intervals.append(interval)
         if len(self.intervals) == max_count:
           break
+    # Sort intervals by start time.
+    self.intervals.sort(key=lambda i:i.start)
 
   def Report(self):
     # TODO(Cheradenine): clean this up.
@@ -134,7 +142,12 @@ def ComputePowerCurve(fname):
 
 if __name__ == "__main__":
   specs = ParseIntervalSpec(sys.argv[1])
-  fit = FitFile(sys.argv[2])
+  try:
+    fit = FitFile(sys.argv[2])
+    fit.parse()
+  except FitParseError as e:
+    print('Unable to parse fit file: {}'.format(e))
+    sys.exit(1)
   intervals = FitIntervals(fit)
   for count, duration in specs:
     intervals.FindIntervals(duration, count)
