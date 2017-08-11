@@ -6,23 +6,22 @@ from fitparse import FitFile, FitParseError
 import pandas as pd
 import numpy as np
 
-FitWindow = namedtuple('FitWindow', ['start', 'end'])
+"""
+Tuple to hold interval information:
+start = the start timestamp of the interval
+end = the end timestamp of the interval
+"""
+FitInterval = namedtuple('FitInterval', ['start', 'end'])
 
-class FitInterval:
-  def __init__(self, df, start, end):
-    self.df = df
-    self.start = start.to_timestamp()
-    self.end = end.to_timestamp()
+def IntervalsOverlap(i1, i2):
+  """ Determines if two FitIntervals overlap.
+  Returns - True if the intervals overlap, False otherwise
+ """
+  if i1.end < i2.start or i1.start > i2.end:
+    return False
+  return True
 
-  def to_dataframe(self):
-    return self.df[self.start:self.end]
-
-  def overlaps(self, interval):
-    if interval.end < self.start or interval.start > self.end:
-      return False
-    return True
-
-def ParseIntervalSpec(spec):
+def ParseIntervalSpec(specs):
   """ The interval spec is a comma separated list of count@time
       pairs. Time can be specified in minutes or seconds using 'm' or 's'
       respectivly.
@@ -45,10 +44,10 @@ def ParseIntervalSpec(spec):
       raise Exception('Unknown duration unit in interval spec: ' + unit)
     return int(count), val
 
-  specs = spec.split(',')
+  specs = specs.split(',')
   return [ParseSpec(spec) for spec in specs]
 
-def FitToDataframe(fitfile, fields):
+def FitToDataFrame(fitfile, fields, interpolate = True):
   """
   Function takes a fit file object and a list of fields to extract.
   All fields will be read from the fit record and converted to a
@@ -78,7 +77,8 @@ def FitToDataframe(fitfile, fields):
   df = pd.DataFrame(data, columns = fields)
 
   # Interpolate to fill in missing values.
-  df[user_fields] = df[user_fields].interpolate(method='cubic')
+  if interpolate:
+    df[user_fields] = df[user_fields].interpolate(method='cubic')
 
   # Change datatype of timestamp field
   df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -91,7 +91,7 @@ def FitToDataframe(fitfile, fields):
 
 def FitPowerCurve(fit):
   # TODO(Cheradenine): not working yet.
-  df = FitToDataframe(fit, ['power'])[['power']]
+  df = FitToDataFrame(fit, ['power'])[['power']]
   seconds = len(df.index)
 
   def MaxWindow(df, size):
@@ -106,10 +106,16 @@ class FitIntervals:
   """
 
   def __init__(self, fit):
-    self.df = FitToDataframe(fit, ['power', 'heart_rate'])
+    self.df = FitToDataFrame(fit, ['power', 'heart_rate'])
     self.intervals = []
 
-  def FindIntervals(self, length, count):
+  def __iter__(self):
+    """
+    Returns - iterable of FitInterval
+    """
+    return iter(self.intervals)
+
+  def Find(self, length, count):
     """ Find a set of intervals.
     Arguments: length - lengh  of interval in seconds
                count - number of intervals to find.
@@ -122,21 +128,26 @@ class FitIntervals:
     for index, row in df.iterrows():
       power = row['power']
       period = pd.Period(index, freq='S')
+      start = (period-length).to_timestamp()
+      end = period.to_timestamp()
       # Windows start on the right edge by default. We want the left edge.
-      interval = FitInterval(self.df, start=period-length, end=period)
+      interval = FitInterval(start=start, end=end)
       # determine if this new interval overlaps with any seen so far
-      if not any(interval.overlaps(i) for i in self.intervals):
+      if not any(IntervalsOverlap(interval, i) for i in self.intervals):
         self.intervals.append(interval)
         if len(self.intervals) == max_count:
           break
     # Sort intervals by start time.
     self.intervals.sort(key=lambda i:i.start)
 
+  def IntervalData(self, interval):
+    return self.df[interval.start:interval.end]
+
   def Report(self):
     # TODO(Cheradenine): clean this up.
     for interval in self.intervals:
       # Slice the data around the interval.
-      df = interval.to_dataframe()
+      df = self.df[interval.start:interval.end]
       print('time={} - {}, power={:03.0f}, hr={:03.0f}'.format(
           interval.start, interval.end, df['power'].mean(), df['heart_rate'].mean()))
 
@@ -160,5 +171,5 @@ if __name__ == "__main__":
     sys.exit(1)
   intervals = FitIntervals(fit)
   for count, duration in specs:
-    intervals.FindIntervals(duration, count)
+    intervals.Find(duration, count)
   intervals.Report()
