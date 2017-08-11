@@ -78,7 +78,7 @@ def FitToDataframe(fitfile, fields):
   df = pd.DataFrame(data, columns = fields)
 
   # Interpolate to fill in missing values.
-  df[user_fields].interpolate(method='cubic')
+  df[user_fields] = df[user_fields].interpolate(method='cubic')
 
   # Change datatype of timestamp field
   df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -102,23 +102,28 @@ def FitPowerCurve(fit):
 
 class FitIntervals:
   """
-  Contains a list of non-overlapping power intervals.
+  Builds a list of non-overlapping power intervals.
   """
 
   def __init__(self, fit):
     self.df = FitToDataframe(fit, ['power', 'heart_rate'])
     self.intervals = []
 
-  def FindIntervals(self, size, count):
+  def FindIntervals(self, length, count):
+    """ Find a set of intervals.
+    Arguments: length - lengh  of interval in seconds
+               count - number of intervals to find.
+    Returns: None
+    """
     df = self.df[['power']]
-    df = df.rolling(window=size).aggregate(np.mean)
+    df = df.rolling(window=length).aggregate(np.mean)
     df = df.sort_values(by='power', ascending=0)
     max_count = len(self.intervals) + count
     for index, row in df.iterrows():
       power = row['power']
       period = pd.Period(index, freq='S')
-      # Windows start on the right edge by default.
-      interval = FitInterval(self.df, start=period-size, end=period)
+      # Windows start on the right edge by default. We want the left edge.
+      interval = FitInterval(self.df, start=period-length, end=period)
       # determine if this new interval overlaps with any seen so far
       if not any(interval.overlaps(i) for i in self.intervals):
         self.intervals.append(interval)
@@ -141,6 +146,11 @@ def ComputePowerCurve(fname):
   return df
 
 if __name__ == "__main__":
+  """ Implementes a command line tool to find intervals.
+  Usage: fit_tools 5@5m,5@30s <fit_file>
+  This would find 5 intervals of 5 mins and 5 intervals of 30 secods.
+  """
+  # TODO(Cheradenine): better command line parsing, error reporting.
   specs = ParseIntervalSpec(sys.argv[1])
   try:
     fit = FitFile(sys.argv[2])
